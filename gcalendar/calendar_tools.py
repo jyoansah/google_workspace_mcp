@@ -25,6 +25,93 @@ from core.server import server
 logger = logging.getLogger(__name__)
 
 
+def _parse_attendees_input(
+    attendees_input: Optional[Union[List[str], List[Dict[str, Any]], str]],
+    function_name: str,
+) -> List[Dict[str, Any]]:
+    """
+    Parse attendees from various input formats and validate them.
+
+    Args:
+        attendees_input: Can be:
+            - List of email strings: ["user@example.com", "room@resource.calendar.google.com"]
+            - List of attendee objects: [{"email": "user@example.com", "responseStatus": "accepted", "organizer": True}]
+            - JSON string containing list of email strings or attendee objects
+        function_name: Name of calling function for logging
+
+    Returns:
+        List of attendee objects suitable for Google Calendar API
+    """
+    if not attendees_input:
+        return []
+
+    # Handle JSON string input
+    if isinstance(attendees_input, str):
+        try:
+            attendees_input = json.loads(attendees_input)
+            if not isinstance(attendees_input, list):
+                logger.warning(
+                    f"[{function_name}] Attendees must be a JSON array, got {type(attendees_input).__name__}"
+                )
+                return []
+        except json.JSONDecodeError as e:
+            logger.warning(f"[{function_name}] Invalid JSON for attendees: {e}")
+            return []
+
+    if not isinstance(attendees_input, list):
+        logger.warning(
+            f"[{function_name}] Attendees must be a list, got {type(attendees_input).__name__}"
+        )
+        return []
+
+    # Process each attendee
+    attendee_objects = []
+    for attendee in attendees_input:
+        if isinstance(attendee, str):
+            # Simple email string format
+            attendee_objects.append({"email": attendee})
+        elif isinstance(attendee, dict):
+            # Attendee object format - validate required email field
+            if "email" not in attendee:
+                logger.warning(
+                    f"[{function_name}] Attendee object missing required 'email' field: {attendee}, skipping"
+                )
+                continue
+
+            # Build attendee object with valid fields
+            attendee_obj = {"email": attendee["email"]}
+
+            # Add optional metadata fields if present
+            if "responseStatus" in attendee:
+                valid_statuses = [
+                    "needsAction",
+                    "declined",
+                    "tentative",
+                    "accepted",
+                ]
+                if attendee["responseStatus"] in valid_statuses:
+                    attendee_obj["responseStatus"] = attendee["responseStatus"]
+                else:
+                    logger.warning(
+                        f"[{function_name}] Invalid responseStatus '{attendee['responseStatus']}' for {attendee['email']}, must be one of {valid_statuses}"
+                    )
+
+            if "organizer" in attendee and isinstance(attendee["organizer"], bool):
+                attendee_obj["organizer"] = attendee["organizer"]
+
+            if "optional" in attendee and isinstance(attendee["optional"], bool):
+                attendee_obj["optional"] = attendee["optional"]
+
+            attendee_objects.append(attendee_obj)
+        else:
+            logger.warning(
+                f"[{function_name}] Invalid attendee format: {attendee}, must be string or dict, skipping"
+            )
+            continue
+
+    return attendee_objects
+
+
 def _parse_reminders_json(
     reminders_input: Optional[Union[str, List[Dict[str, Any]]]], function_name: str
 ) -> List[Dict[str, Any]]:
@@ -441,6 +528,7 @@ async def get_events(
         link = item.get("htmlLink", "No Link")
         description = item.get("description", "No Description")
         location = item.get("location", "No Location")
+        color_id = item.get("colorId", "Default")
         attendees = item.get("attendees", [])
         attendee_emails = (
             ", ".join([a.get("email", "") for a in attendees]) if attendees else "None"
@@ -454,6 +542,7 @@ async def get_events(
             f"- Ends: {end}\n"
             f"- Description: {description}\n"
             f"- Location: {location}\n"
+            f"- Color ID: {color_id}\n"
             f"- Attendees: {attendee_emails}\n"
             f"- Attendee Details: {attendee_details_str}\n"
         )
@@ -484,6 +573,7 @@ async def get_events(
             # Add detailed information for multiple events
             description = item.get("description", "No Description")
             location = item.get("location", "No Location")
+            color_id = item.get("colorId", "Default")
             attendees = item.get("attendees", [])
             attendee_emails = (
                 ", ".join([a.get("email", "") for a in attendees])
@@ -496,6 +586,7 @@ async def get_events(
                 f'- "{summary}" (Starts: {start_time}, Ends: {end_time})\n'
                 f"  Description: {description}\n"
                 f"  Location: {location}\n"
+                f"  Color ID: {color_id}\n"
                 f"  Attendees: {attendee_emails}\n"
                 f"  Attendee Details: {attendee_details_str}\n"
             )
@@ -544,7 +635,7 @@ async def create_event(
     calendar_id: str = "primary",
     description: Optional[str] = None,
     location: Optional[str] = None,
-    attendees: Optional[List[str]] = None,
+    attendees: Optional[Union[List[str], List[Dict[str, Any]], str]] = None,
     timezone: Optional[str] = None,
     attachments: Optional[List[str]] = None,
     add_google_meet: bool = False,
@@ -552,6 +643,7 @@ async def create_event(
     use_default_reminders: bool = True,
     transparency: Optional[str] = None,
     visibility: Optional[str] = None,
+    color_id: Optional[str] = None,
 ) -> str:
     """
     Creates a new event.
@@ -564,7 +656,10 @@ async def create_event(
         calendar_id (str): Calendar ID (default: 'primary').
         description (Optional[str]): Event description.
         location (Optional[str]): Event location.
-        attendees (Optional[List[str]]): Attendee email addresses.
+        attendees (Optional[Union[List[str], List[Dict[str, Any]], str]]): Attendee information. Can be:
+            - List of email strings: ["user@example.com", "room@resource.calendar.google.com"]
+            - List of attendee objects with metadata: [{"email": "user@example.com", "responseStatus": "accepted", "organizer": True, "optional": False}]
+            - JSON string containing list of email strings or attendee objects
         timezone (Optional[str]): Timezone (e.g., "America/New_York").
         attachments (Optional[List[str]]): List of Google Drive file URLs or IDs to attach to the event.
         add_google_meet (bool): Whether to add a Google Meet video conference to the event. Defaults to False.
@@ -572,6 +667,7 @@ async def create_event(
         use_default_reminders (bool): Whether to use calendar's default reminders. If False, uses custom reminders. Defaults to True.
         transparency (Optional[str]): Event transparency for busy/free status. "opaque" shows as Busy (default), "transparent" shows as Available/Free. Defaults to None (uses Google Calendar default).
         visibility (Optional[str]): Event visibility. "default" uses calendar default, "public" is visible to all, "private" is visible only to attendees, "confidential" is same as private (legacy). Defaults to None (uses Google Calendar default).
+        color_id (Optional[str]): Event color. Values are string IDs from "1" to "11" representing different colors. If None, uses calendar default color.
 
     Returns:
         str: Confirmation message of the successful event creation with event link.
@@ -603,7 +699,15 @@ async def create_event(
         if "dateTime" in event_body["end"]:
             event_body["end"]["timeZone"] = timezone
     if attendees:
-        event_body["attendees"] = [{"email": email} for email in attendees]
+        parsed_attendees = _parse_attendees_input(attendees, "create_event")
+        if parsed_attendees:
+            event_body["attendees"] = parsed_attendees
+            logger.info(
+                f"[create_event] Added {len(parsed_attendees)} attendees to event"
+            )
+    if color_id is not None:
+        event_body["colorId"] = str(color_id)
+        logger.info(f"[create_event] Set event color to colorId '{color_id}'")
 
     # Handle reminders
     if reminders is not None or not use_default_reminders:
@@ -756,13 +860,14 @@ async def modify_event(
     end_time: Optional[str] = None,
     description: Optional[str] = None,
     location: Optional[str] = None,
-    attendees: Optional[List[str]] = None,
+    attendees: Optional[Union[List[str], List[Dict[str, Any]], str]] = None,
     timezone: Optional[str] = None,
     add_google_meet: Optional[bool] = None,
     reminders: Optional[Union[str, List[Dict[str, Any]]]] = None,
     use_default_reminders: Optional[bool] = None,
     transparency: Optional[str] = None,
     visibility: Optional[str] = None,
+    color_id: Optional[str] = None,
 ) -> str:
     """
     Modifies an existing event.
@@ -776,13 +881,18 @@ async def modify_event(
         end_time (Optional[str]): New end time (RFC3339, e.g., "2023-10-27T11:00:00-07:00" or "2023-10-28" for all-day).
         description (Optional[str]): New event description.
         location (Optional[str]): New event location.
-        attendees (Optional[List[str]]): New attendee email addresses.
+        attendees (Optional[Union[List[str], List[Dict[str, Any]], str]]): Attendee information. Can be:
+            - List of email strings: ["user@example.com", "room@resource.calendar.google.com"]
+            - List of attendee objects with metadata: [{"email": "user@example.com", "responseStatus": "accepted", "organizer": True, "optional": False}]
+            - JSON string containing list of email strings or attendee objects
+            When provided, completely replaces the existing attendee list. To preserve existing attendees, include them in the list with their metadata.
         timezone (Optional[str]): New timezone (e.g., "America/New_York").
         add_google_meet (Optional[bool]): Whether to add or remove Google Meet video conference. If True, adds Google Meet; if False, removes it; if None, leaves unchanged.
         reminders (Optional[Union[str, List[Dict[str, Any]]]]): JSON string or list of reminder objects to replace existing reminders. Each should have 'method' ("popup" or "email") and 'minutes' (0-40320). Max 5 reminders. Example: '[{"method": "popup", "minutes": 15}]' or [{"method": "popup", "minutes": 15}]
         use_default_reminders (Optional[bool]): Whether to use calendar's default reminders. If specified, overrides current reminder settings.
         transparency (Optional[str]): Event transparency for busy/free status. "opaque" shows as Busy, "transparent" shows as Available/Free. If None, preserves existing transparency setting.
         visibility (Optional[str]): Event visibility. "default" uses calendar default, "public" is visible to all, "private" is visible only to attendees, "confidential" is same as private (legacy). If None, preserves existing visibility setting.
+        color_id (Optional[str]): Event color. Values are string IDs from "1" to "11" representing different colors. If None, preserves existing color.
 
     Returns:
         str: Confirmation message of the successful event modification with event link.
@@ -812,7 +922,15 @@ async def modify_event(
     if location is not None:
         event_body["location"] = location
     if attendees is not None:
-        event_body["attendees"] = [{"email": email} for email in attendees]
+        parsed_attendees = _parse_attendees_input(attendees, "modify_event")
+        if parsed_attendees:
+            event_body["attendees"] = parsed_attendees
+            logger.info(
+                f"[modify_event] Updating event with {len(parsed_attendees)} attendees"
+            )
+    if color_id is not None:
+        event_body["colorId"] = str(color_id)
+        logger.info(f"[modify_event] Set event color to colorId '{color_id}'")
 
     # Handle reminders
     if reminders is not None or use_default_reminders is not None:
@@ -903,6 +1021,7 @@ async def modify_event(
                 "summary": summary,
                 "description": description,
                 "location": location,
+                "colorId": color_id,
                 # Use the already-normalized attendee objects (if provided); otherwise preserve existing
                 "attendees": event_body.get("attendees"),
             },
