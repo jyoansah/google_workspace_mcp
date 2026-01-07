@@ -24,6 +24,7 @@ from auth.scopes import (
     GMAIL_COMPOSE_SCOPE,
     GMAIL_MODIFY_SCOPE,
     GMAIL_LABELS_SCOPE,
+    GMAIL_SETTINGS_BASIC_SCOPE,
 )
 
 logger = logging.getLogger(__name__)
@@ -1718,3 +1719,284 @@ async def batch_modify_gmail_message_labels(
         actions.append(f"Removed labels: {', '.join(remove_label_ids)}")
 
     return f"Labels updated for {len(message_ids)} messages: {'; '.join(actions)}"
+
+
+# =============================================================================
+# Gmail Filter Management Tools
+# =============================================================================
+
+
+@server.tool()
+@handle_http_errors("list_gmail_filters", is_read_only=True, service_type="gmail")
+@require_google_service("gmail", GMAIL_SETTINGS_BASIC_SCOPE)
+async def list_gmail_filters(service, user_google_email: str) -> str:
+    """
+    Lists all message filters in the user's Gmail account.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+
+    Returns:
+        str: A formatted list of all filters with their IDs, criteria, and actions.
+    """
+    logger.info(f"[list_gmail_filters] Invoked. Email: '{user_google_email}'")
+
+    response = await asyncio.to_thread(
+        service.users().settings().filters().list(userId="me").execute
+    )
+    filters = response.get("filter", [])
+
+    if not filters:
+        return "No filters found."
+
+    lines = [f"Found {len(filters)} filters:", ""]
+
+    for f in filters:
+        filter_id = f.get("id", "N/A")
+        criteria = f.get("criteria", {})
+        action = f.get("action", {})
+
+        lines.append(f"**Filter ID:** {filter_id}")
+
+        # Format criteria
+        criteria_parts = []
+        if criteria.get("from"):
+            criteria_parts.append(f"From: {criteria['from']}")
+        if criteria.get("to"):
+            criteria_parts.append(f"To: {criteria['to']}")
+        if criteria.get("subject"):
+            criteria_parts.append(f"Subject: {criteria['subject']}")
+        if criteria.get("query"):
+            criteria_parts.append(f"Query: {criteria['query']}")
+        if criteria.get("negatedQuery"):
+            criteria_parts.append(f"Negated Query: {criteria['negatedQuery']}")
+        if criteria.get("hasAttachment"):
+            criteria_parts.append("Has Attachment: Yes")
+        if criteria.get("excludeChats"):
+            criteria_parts.append("Exclude Chats: Yes")
+        if criteria.get("size"):
+            size_comp = criteria.get("sizeComparison", "unspecified")
+            criteria_parts.append(f"Size {size_comp}: {criteria['size']} bytes")
+
+        if criteria_parts:
+            lines.append(f"  Criteria: {', '.join(criteria_parts)}")
+        else:
+            lines.append("  Criteria: (none)")
+
+        # Format actions
+        action_parts = []
+        if action.get("addLabelIds"):
+            action_parts.append(f"Add Labels: {', '.join(action['addLabelIds'])}")
+        if action.get("removeLabelIds"):
+            action_parts.append(f"Remove Labels: {', '.join(action['removeLabelIds'])}")
+        if action.get("forward"):
+            action_parts.append(f"Forward to: {action['forward']}")
+
+        if action_parts:
+            lines.append(f"  Actions: {', '.join(action_parts)}")
+        else:
+            lines.append("  Actions: (none)")
+
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+@server.tool()
+@handle_http_errors("get_gmail_filter", is_read_only=True, service_type="gmail")
+@require_google_service("gmail", GMAIL_SETTINGS_BASIC_SCOPE)
+async def get_gmail_filter(
+    service,
+    user_google_email: str,
+    filter_id: str = Field(description="The ID of the filter to retrieve."),
+) -> str:
+    """
+    Retrieves a specific Gmail filter by ID.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        filter_id (str): The ID of the filter to retrieve.
+
+    Returns:
+        str: A detailed description of the filter's criteria and actions.
+    """
+    logger.info(f"[get_gmail_filter] Invoked. Email: '{user_google_email}', Filter ID: '{filter_id}'")
+
+    f = await asyncio.to_thread(
+        service.users().settings().filters().get(userId="me", id=filter_id).execute
+    )
+
+    criteria = f.get("criteria", {})
+    action = f.get("action", {})
+
+    lines = [f"**Filter ID:** {f.get('id', filter_id)}", ""]
+
+    # Format criteria
+    lines.append("**Criteria:**")
+    if criteria.get("from"):
+        lines.append(f"  - From: {criteria['from']}")
+    if criteria.get("to"):
+        lines.append(f"  - To: {criteria['to']}")
+    if criteria.get("subject"):
+        lines.append(f"  - Subject: {criteria['subject']}")
+    if criteria.get("query"):
+        lines.append(f"  - Query: {criteria['query']}")
+    if criteria.get("negatedQuery"):
+        lines.append(f"  - Negated Query: {criteria['negatedQuery']}")
+    if criteria.get("hasAttachment"):
+        lines.append("  - Has Attachment: Yes")
+    if criteria.get("excludeChats"):
+        lines.append("  - Exclude Chats: Yes")
+    if criteria.get("size"):
+        size_comp = criteria.get("sizeComparison", "unspecified")
+        lines.append(f"  - Size {size_comp}: {criteria['size']} bytes")
+    if not any([criteria.get(k) for k in ["from", "to", "subject", "query", "negatedQuery", "hasAttachment", "excludeChats", "size"]]):
+        lines.append("  (no criteria)")
+
+    # Format actions
+    lines.append("")
+    lines.append("**Actions:**")
+    if action.get("addLabelIds"):
+        lines.append(f"  - Add Labels: {', '.join(action['addLabelIds'])}")
+    if action.get("removeLabelIds"):
+        lines.append(f"  - Remove Labels: {', '.join(action['removeLabelIds'])}")
+    if action.get("forward"):
+        lines.append(f"  - Forward to: {action['forward']}")
+    if not any([action.get(k) for k in ["addLabelIds", "removeLabelIds", "forward"]]):
+        lines.append("  (no actions)")
+
+    return "\n".join(lines)
+
+
+@server.tool()
+@handle_http_errors("create_gmail_filter", service_type="gmail")
+@require_google_service("gmail", GMAIL_SETTINGS_BASIC_SCOPE)
+async def create_gmail_filter(
+    service,
+    user_google_email: str,
+    # Criteria fields
+    from_address: Optional[str] = Field(default=None, description="Sender's email address or name to match."),
+    to_address: Optional[str] = Field(default=None, description="Recipient address to match (to, cc, bcc)."),
+    subject: Optional[str] = Field(default=None, description="Subject phrase to match (case-insensitive)."),
+    query: Optional[str] = Field(default=None, description="Gmail search query (same format as Gmail search box)."),
+    negated_query: Optional[str] = Field(default=None, description="Messages that do NOT match this query."),
+    has_attachment: Optional[bool] = Field(default=None, description="Filter messages with attachments."),
+    exclude_chats: Optional[bool] = Field(default=None, description="Exclude chat messages from filter."),
+    size: Optional[int] = Field(default=None, description="Message size in bytes for comparison."),
+    size_comparison: Optional[Literal["larger", "smaller"]] = Field(default=None, description="Compare message size as 'larger' or 'smaller' than the size value."),
+    # Action fields
+    add_label_ids: Optional[List[str]] = Field(default=None, description="Label IDs to add to matching messages."),
+    remove_label_ids: Optional[List[str]] = Field(default=None, description="Label IDs to remove from matching messages."),
+    forward_to: Optional[str] = Field(default=None, description="Email address to forward matching messages to."),
+) -> str:
+    """
+    Creates a new Gmail filter with specified criteria and actions.
+
+    At least one criteria and one action must be specified.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        from_address (str, optional): Sender's email address or name to match.
+        to_address (str, optional): Recipient address to match.
+        subject (str, optional): Subject phrase to match.
+        query (str, optional): Gmail search query.
+        negated_query (str, optional): Inverse query matching.
+        has_attachment (bool, optional): Filter messages with attachments.
+        exclude_chats (bool, optional): Exclude chat messages.
+        size (int, optional): Message size in bytes.
+        size_comparison (str, optional): 'larger' or 'smaller' for size comparison.
+        add_label_ids (List[str], optional): Label IDs to add.
+        remove_label_ids (List[str], optional): Label IDs to remove.
+        forward_to (str, optional): Email address to forward to.
+
+    Returns:
+        str: Confirmation with the created filter's ID and details.
+    """
+    logger.info(f"[create_gmail_filter] Invoked. Email: '{user_google_email}'")
+
+    # Build criteria
+    criteria = {}
+    if from_address:
+        criteria["from"] = from_address
+    if to_address:
+        criteria["to"] = to_address
+    if subject:
+        criteria["subject"] = subject
+    if query:
+        criteria["query"] = query
+    if negated_query:
+        criteria["negatedQuery"] = negated_query
+    if has_attachment is not None:
+        criteria["hasAttachment"] = has_attachment
+    if exclude_chats is not None:
+        criteria["excludeChats"] = exclude_chats
+    if size is not None:
+        criteria["size"] = size
+    if size_comparison:
+        criteria["sizeComparison"] = size_comparison
+
+    if not criteria:
+        raise ValueError("At least one filter criteria must be specified.")
+
+    # Build action
+    action = {}
+    if add_label_ids:
+        action["addLabelIds"] = add_label_ids
+    if remove_label_ids:
+        action["removeLabelIds"] = remove_label_ids
+    if forward_to:
+        action["forward"] = forward_to
+
+    if not action:
+        raise ValueError("At least one filter action must be specified.")
+
+    # Create filter body
+    filter_body = {
+        "criteria": criteria,
+        "action": action
+    }
+
+    result = await asyncio.to_thread(
+        service.users().settings().filters().create(userId="me", body=filter_body).execute
+    )
+
+    filter_id = result.get("id", "unknown")
+
+    # Format summary
+    criteria_summary = ", ".join([f"{k}: {v}" for k, v in criteria.items()])
+    action_summary = []
+    if add_label_ids:
+        action_summary.append(f"add labels: {', '.join(add_label_ids)}")
+    if remove_label_ids:
+        action_summary.append(f"remove labels: {', '.join(remove_label_ids)}")
+    if forward_to:
+        action_summary.append(f"forward to: {forward_to}")
+
+    return f"Filter created successfully.\n\n**Filter ID:** {filter_id}\n**Criteria:** {criteria_summary}\n**Actions:** {', '.join(action_summary)}"
+
+
+@server.tool()
+@handle_http_errors("delete_gmail_filter", service_type="gmail")
+@require_google_service("gmail", GMAIL_SETTINGS_BASIC_SCOPE)
+async def delete_gmail_filter(
+    service,
+    user_google_email: str,
+    filter_id: str = Field(description="The ID of the filter to delete."),
+) -> str:
+    """
+    Permanently deletes a Gmail filter by ID.
+
+    Args:
+        user_google_email (str): The user's Google email address. Required.
+        filter_id (str): The ID of the filter to delete.
+
+    Returns:
+        str: Confirmation that the filter was deleted.
+    """
+    logger.info(f"[delete_gmail_filter] Invoked. Email: '{user_google_email}', Filter ID: '{filter_id}'")
+
+    await asyncio.to_thread(
+        service.users().settings().filters().delete(userId="me", id=filter_id).execute
+    )
+
+    return f"Filter '{filter_id}' deleted successfully."
