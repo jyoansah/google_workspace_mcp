@@ -11,6 +11,10 @@ gmail:
     - list_gmail_labels
     - manage_gmail_label
     - draft_gmail_message
+    - list_gmail_filters
+    - get_gmail_filter
+    - create_gmail_filter
+    - delete_gmail_filter
 
   complete:
     - get_gmail_threads_content_batch

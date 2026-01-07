@@ -530,7 +530,7 @@ def get_credentials(
     session_id: Optional[str] = None,
 ) -> Optional[Credentials]:
     """
-    Retrieves stored credentials, prioritizing OAuth 2.1 store, then session, then file. Refreshes if necessary.
+    Retrieves stored credentials, prioritizing user_google_email lookup, then session, then file. Refreshes if necessary.
     If credentials are loaded from file and a session_id is present, they are cached in the session.
     In single-user mode, bypasses session mapping and uses any available credentials.
 
@@ -544,8 +544,42 @@ def get_credentials(
     Returns:
         Valid Credentials object or None.
     """
-    # First, try OAuth 2.1 session store if we have a session_id (FastMCP session)
-    if session_id:
+    # IMPORTANT: When user_google_email is explicitly provided, prioritize loading
+    # credentials for that specific email first. This enables multi-account support
+    # where different tools can use different accounts in the same session.
+    if user_google_email:
+        logger.debug(f"[get_credentials] User email explicitly provided: {user_google_email}, loading by email first")
+
+        # Try credential store by email first (primary lookup for multi-account)
+        if not is_stateless_mode():
+            store = get_credential_store()
+            credentials = store.get_credential(user_google_email)
+            if credentials:
+                logger.info(f"[get_credentials] Found credentials for {user_google_email} in credential store")
+
+                # Check scopes
+                if not all(scope in (credentials.scopes or []) for scope in required_scopes):
+                    logger.warning(
+                        f"[get_credentials] Credentials for {user_google_email} lack required scopes. Need: {required_scopes}, Have: {credentials.scopes}"
+                    )
+                    # Continue to try other sources or return None
+                else:
+                    # Credentials have required scopes, check validity
+                    if credentials.valid:
+                        return credentials
+                    elif credentials.expired and credentials.refresh_token:
+                        try:
+                            credentials.refresh(Request())
+                            logger.info(f"[get_credentials] Refreshed credentials for {user_google_email}")
+                            store.store_credential(user_google_email, credentials)
+                            return credentials
+                        except Exception as e:
+                            logger.warning(f"[get_credentials] Failed to refresh credentials for {user_google_email}: {e}")
+                            # Fall through to try other sources
+
+    # Second, try OAuth 2.1 session store if we have a session_id (FastMCP session)
+    # This is used when no explicit email is provided or as a fallback
+    if session_id and not user_google_email:
         try:
             store = get_oauth21_session_store()
 
@@ -632,32 +666,30 @@ def get_credentials(
             f"[get_credentials] Called for user_google_email: '{user_google_email}', session_id: '{session_id}', required_scopes: {required_scopes}"
         )
 
-        if session_id:
+        # MULTI-ACCOUNT FIX: When user_google_email is provided, prioritize email-based lookup
+        # over session-based lookup to support using different accounts in the same session
+        if user_google_email:
+            if not is_stateless_mode():
+                logger.debug(
+                    f"[get_credentials] Trying credential store for user_google_email '{user_google_email}' (multi-account mode)."
+                )
+                store = get_credential_store()
+                credentials = store.get_credential(user_google_email)
+                if credentials:
+                    logger.debug(
+                        f"[get_credentials] Found credentials for user '{user_google_email}' in credential store."
+                    )
+            else:
+                logger.debug(
+                    f"[get_credentials] Skipping file store in stateless mode for user_google_email '{user_google_email}'."
+                )
+        elif session_id:
+            # Only use session-based lookup when no email is explicitly provided
             credentials = load_credentials_from_session(session_id)
             if credentials:
                 logger.debug(
                     f"[get_credentials] Loaded credentials from session for session_id '{session_id}'."
                 )
-
-        if not credentials and user_google_email:
-            if not is_stateless_mode():
-                logger.debug(
-                    f"[get_credentials] No session credentials, trying credential store for user_google_email '{user_google_email}'."
-                )
-                store = get_credential_store()
-                credentials = store.get_credential(user_google_email)
-            else:
-                logger.debug(
-                    f"[get_credentials] No session credentials, skipping file store in stateless mode for user_google_email '{user_google_email}'."
-                )
-
-            if credentials and session_id:
-                logger.debug(
-                    f"[get_credentials] Loaded from file for user '{user_google_email}', caching to session '{session_id}'."
-                )
-                save_credentials_to_session(
-                    session_id, credentials
-                )  # Cache for current session
 
         if not credentials:
             logger.info(
