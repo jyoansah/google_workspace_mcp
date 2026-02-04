@@ -94,6 +94,7 @@ def main():
         "--tools",
         nargs="*",
         choices=[
+            "auth",
             "gmail",
             "drive",
             "calendar",
@@ -173,7 +174,9 @@ def main():
     safe_print("")
 
     # Import tool modules to register them with the MCP server via decorators
+    # Note: "auth" tools are defined in core/server.py and are always available
     tool_imports = {
+        "auth": lambda: None,  # Auth tools are in core/server.py, always loaded
         "gmail": lambda: import_module("gmail.gmail_tools"),
         "drive": lambda: import_module("gdrive.drive_tools"),
         "calendar": lambda: import_module("gcalendar.calendar_tools"),
@@ -187,6 +190,7 @@ def main():
     }
 
     tool_icons = {
+        "auth": "🔑",
         "gmail": "📧",
         "drive": "📁",
         "calendar": "📅",

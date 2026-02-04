@@ -29,3 +29,6 @@ mcp_server_debug.log
 # ---- Local development files -------------------------------------------
 /.credentials
 /.claude
+
+# Temporary files
+tmp/

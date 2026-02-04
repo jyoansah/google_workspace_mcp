@@ -512,6 +512,72 @@ async def legacy_oauth2_callback(request: Request) -> HTMLResponse:
 
 
 @server.tool()
+async def list_authenticated_accounts() -> str:
+    """
+    List all Google accounts that have cached/authenticated credentials.
+
+    This tool helps discover which Google accounts are available for use with
+    Google Workspace tools. It scans the credential storage directory and returns
+    a list of email addresses that have valid tokens stored.
+
+    Use this tool when you need to:
+    1. Find out which accounts are available without guessing
+    2. Verify an account has been authenticated
+    3. Choose which account to use for subsequent operations
+
+    Returns:
+        A formatted list of authenticated Google email addresses, or a message
+        indicating no accounts are authenticated.
+    """
+    from auth.credential_store import get_credential_store
+    from auth.oauth_config import is_stateless_mode
+
+    if is_stateless_mode():
+        return (
+            "**Stateless Mode Active**\n\n"
+            "This server is running in stateless mode (OAuth 2.1), which does not "
+            "persist credentials locally. Authentication is handled per-session via "
+            "OAuth 2.1 tokens.\n\n"
+            "To authenticate, simply call any Google Workspace tool with your "
+            "`user_google_email` - you will be prompted to authenticate if needed."
+        )
+
+    try:
+        store = get_credential_store()
+        users = store.list_users()
+
+        if not users:
+            return (
+                "**No Authenticated Accounts Found**\n\n"
+                "No Google accounts have been authenticated yet. To authenticate:\n"
+                "1. Call any Google Workspace tool (e.g., `get_events`, `search_gmail_messages`)\n"
+                "2. Provide your Google email address in the `user_google_email` parameter\n"
+                "3. Follow the authentication link provided\n\n"
+                "After successful authentication, your credentials will be cached for future use."
+            )
+
+        # Build a formatted response
+        lines = [
+            "**Authenticated Google Accounts**\n",
+            f"Found {len(users)} authenticated account{'s' if len(users) != 1 else ''}:\n",
+        ]
+
+        for i, email in enumerate(users, 1):
+            lines.append(f"  {i}. `{email}`")
+
+        lines.append(
+            "\n\n**Usage:** Specify one of these email addresses in the `user_google_email` "
+            "parameter when calling Google Workspace tools."
+        )
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        logger.error(f"Failed to list authenticated accounts: {e}", exc_info=True)
+        return f"**Error:** Failed to list authenticated accounts: {e}"
+
+
+@server.tool()
 async def start_google_auth(
     service_name: str, user_google_email: str = USER_GOOGLE_EMAIL
 ) -> str:
