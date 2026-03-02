@@ -848,25 +848,29 @@ async def get_gmail_attachment_content(
             )
 
         # Save attachment
-        file_id = storage.save_attachment(
+        file_id, absolute_path = storage.save_attachment(
             base64_data=base64_data, filename=filename, mime_type=mime_type
         )
 
-        # Generate URL
+        # Generate URL (secondary access method)
         attachment_url = get_attachment_url(file_id)
+
+        display_filename = filename or "attachment"
 
         result_lines = [
             "Attachment downloaded successfully!",
             f"Message ID: {message_id}",
             f"Size: {size_kb:.1f} KB ({size_bytes} bytes)",
-            f"\n📎 Download URL: {attachment_url}",
-            "\nThe attachment has been saved and is available at the URL above.",
-            "The file will expire after 1 hour.",
+            f"\nSaved to: {absolute_path}",
+            f"   Original filename: {display_filename}",
+            "\nThe file is available at the path above. Use the Read tool to view it.",
+            "The file will be cleaned up after 1 hour.",
+            f"\nAlternative download URL: {attachment_url}",
             "\nNote: Attachment IDs are ephemeral. Always use IDs from the most recent message fetch.",
         ]
 
         logger.info(
-            f"[get_gmail_attachment_content] Successfully saved {size_kb:.1f} KB attachment as {file_id}"
+            f"[get_gmail_attachment_content] Successfully saved {size_kb:.1f} KB attachment as {file_id} at {absolute_path}"
         )
         return "\n".join(result_lines)
 

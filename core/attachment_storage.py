@@ -1,7 +1,8 @@
 """
 Temporary attachment storage for Gmail attachments.
 
-Stores attachments in ./tmp directory and provides HTTP URLs for access.
+Stores attachments in an absolute path (/tmp/google_workspace_mcp/attachments/)
+and provides both file paths and HTTP URLs for access.
 Files are automatically cleaned up after expiration (default 1 hour).
 """
 
@@ -9,7 +10,7 @@ import base64
 import logging
 import uuid
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, Tuple
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
@@ -17,8 +18,8 @@ logger = logging.getLogger(__name__)
 # Default expiration: 1 hour
 DEFAULT_EXPIRATION_SECONDS = 3600
 
-# Storage directory
-STORAGE_DIR = Path("./tmp/attachments")
+# Storage directory - use absolute path so files are accessible regardless of cwd
+STORAGE_DIR = Path("/tmp/google_workspace_mcp/attachments")
 STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -34,9 +35,9 @@ class AttachmentStorage:
         base64_data: str,
         filename: Optional[str] = None,
         mime_type: Optional[str] = None,
-    ) -> str:
+    ) -> Tuple[str, str]:
         """
-        Save an attachment and return a unique file ID.
+        Save an attachment and return a unique file ID and the absolute file path.
 
         Args:
             base64_data: Base64-encoded attachment data
@@ -44,7 +45,7 @@ class AttachmentStorage:
             mime_type: MIME type (optional)
 
         Returns:
-            Unique file ID (UUID string)
+            Tuple of (file_id, absolute_file_path)
         """
         # Generate unique file ID
         file_id = str(uuid.uuid4())
@@ -85,9 +86,10 @@ class AttachmentStorage:
             raise
 
         # Store metadata
+        absolute_path = str(file_path.resolve())
         expires_at = datetime.now() + timedelta(seconds=self.expiration_seconds)
         self._metadata[file_id] = {
-            "file_path": str(file_path),
+            "file_path": absolute_path,
             "filename": filename or f"attachment{extension}",
             "mime_type": mime_type or "application/octet-stream",
             "size": len(file_bytes),
@@ -95,7 +97,7 @@ class AttachmentStorage:
             "expires_at": expires_at,
         }
 
-        return file_id
+        return file_id, absolute_path
 
     def get_attachment_path(self, file_id: str) -> Optional[Path]:
         """

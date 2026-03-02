@@ -346,13 +346,13 @@ async def get_drive_file_download_url(
         base64_data = base64.urlsafe_b64encode(file_content_bytes).decode("utf-8")
 
         # Save attachment
-        saved_file_id = storage.save_attachment(
+        saved_file_id, absolute_path = storage.save_attachment(
             base64_data=base64_data,
             filename=output_filename,
             mime_type=output_mime_type,
         )
 
-        # Generate URL
+        # Generate URL (secondary access method)
         download_url = get_attachment_url(saved_file_id)
 
         result_lines = [
@@ -361,9 +361,11 @@ async def get_drive_file_download_url(
             f"File ID: {file_id}",
             f"Size: {size_kb:.1f} KB ({size_bytes} bytes)",
             f"MIME Type: {output_mime_type}",
-            f"\n📎 Download URL: {download_url}",
-            "\nThe file has been saved and is available at the URL above.",
-            "The file will expire after 1 hour.",
+            f"\nSaved to: {absolute_path}",
+            f"   Original filename: {output_filename}",
+            "\nThe file is available at the path above. Use the Read tool to view it.",
+            "The file will be cleaned up after 1 hour.",
+            f"\nAlternative download URL: {download_url}",
         ]
 
         if export_mime_type:
@@ -372,7 +374,7 @@ async def get_drive_file_download_url(
             )
 
         logger.info(
-            f"[get_drive_file_download_url] Successfully saved {size_kb:.1f} KB file as {saved_file_id}"
+            f"[get_drive_file_download_url] Successfully saved {size_kb:.1f} KB file as {saved_file_id} at {absolute_path}"
         )
         return "\n".join(result_lines)
 
