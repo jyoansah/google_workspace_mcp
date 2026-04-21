@@ -359,6 +359,11 @@ async def start_auth_flow(
 
         auth_url, _ = flow.authorization_url(access_type="offline", prompt="consent")
 
+        # google-auth-oauthlib auto-generates a PKCE verifier on authorization_url().
+        # Persist it with the state so handle_auth_callback can restore it on the
+        # new Flow it constructs for fetch_token.
+        code_verifier = getattr(flow, "code_verifier", None)
+
         session_id = None
         try:
             session_id = get_fastmcp_session_id()
@@ -368,7 +373,9 @@ async def start_auth_flow(
             )
 
         store = get_oauth21_session_store()
-        store.store_oauth_state(oauth_state, session_id=session_id)
+        store.store_oauth_state(
+            oauth_state, session_id=session_id, code_verifier=code_verifier
+        )
 
         logger.info(
             f"Auth flow started for {user_display_name}. State: {oauth_state[:8]}... Advise user to visit: {auth_url}"
@@ -476,6 +483,12 @@ def handle_auth_callback(
         )
 
         flow = create_oauth_flow(scopes=scopes, redirect_uri=redirect_uri, state=state)
+
+        # Restore the PKCE verifier captured when the auth URL was generated.
+        # Required so fetch_token sends code_verifier alongside the auth code.
+        stored_code_verifier = state_info.get("code_verifier")
+        if stored_code_verifier:
+            flow.code_verifier = stored_code_verifier
 
         # Exchange the authorization code for credentials
         # Note: fetch_token will use the redirect_uri configured in the flow
