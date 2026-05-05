@@ -19,6 +19,10 @@ gmail:
     - list_gmail_labels
     - manage_gmail_label
     - draft_gmail_message
+    - update_gmail_draft
+    - delete_gmail_draft
+    - list_gmail_drafts
+    - get_gmail_draft
     - list_gmail_filters
     - get_gmail_filter
     - create_gmail_filter
